@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import useOptimizedScheduling, { SlotViavel } from "@/hooks/useOptimizedScheduling";
+import AgendamentoForm from "@/components/AgendamentoForm";
 
 interface Agendamento {
   id: string;
@@ -22,6 +23,8 @@ const Dashboard = () => {
   const [agendamentos, setAgendamentos] = useState<Agendamento[]>([]);
   const [horariosOtimizados, setHorariosOtimizados] = useState<SlotViavel[]>([]);
   const [enderecoSelecionado, setEnderecoSelecionado] = useState<string>("");
+  const [showAgendamentoForm, setShowAgendamentoForm] = useState(false);
+  const [selectedSlot, setSelectedSlot] = useState<SlotViavel | null>(null);
   const { buscarHorariosOtimizados, isLoading } = useOptimizedScheduling();
 
   // Mock data - simulando dados do Firebase
@@ -65,21 +68,31 @@ const Dashboard = () => {
   };
 
   const agendarColeta = (slot: SlotViavel) => {
+    setSelectedSlot(slot);
+    setShowAgendamentoForm(true);
+  };
+
+  const confirmarAgendamento = (dadosPaciente: any) => {
+    if (!selectedSlot) return;
+    
     const novoAgendamento: Agendamento = {
       id: Date.now().toString(),
       enderecoColeta: enderecoSelecionado,
-      colhedor: slot.colhedor,
-      dataHora: slot.dataHora,
+      colhedor: selectedSlot.colhedor,
+      dataHora: selectedSlot.dataHora,
       coordenadas: { lat: -19.9245, lng: -43.9352 }, // Mock coordinates
       status: "agendado",
-      tempoViagem: slot.tempoViagemTotal,
-      distancia: slot.distanciaTotal
+      tempoViagem: selectedSlot.tempoViagemTotal,
+      distancia: selectedSlot.distanciaTotal
     };
     
     setAgendamentos([...agendamentos, novoAgendamento]);
     setHorariosOtimizados([]);
     setEnderecoBusca("");
     setEnderecoSelecionado("");
+    setSelectedSlot(null);
+    
+    console.log("Agendamento confirmado:", { agendamento: novoAgendamento, paciente: dadosPaciente });
   };
 
   const getEfficiencyLevel = (index: number, scoreFinal: number) => {
@@ -317,6 +330,13 @@ const Dashboard = () => {
 
         </div>
       </div>
+
+      <AgendamentoForm
+        open={showAgendamentoForm}
+        onOpenChange={setShowAgendamentoForm}
+        slot={selectedSlot}
+        onConfirm={confirmarAgendamento}
+      />
     </div>
   );
 };
