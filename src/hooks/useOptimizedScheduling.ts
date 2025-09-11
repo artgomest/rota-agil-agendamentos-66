@@ -1,6 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { collection, getDocs, query, where, doc, getDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import { Coletor } from "@/types/firestore";
+import { Loader } from "@googlemaps/js-api-loader";
 
-// Tipos para o sistema de agendamento otimizado
+// Tipos para o sistema de agendamento
 export interface Coordinates {
   lat: number;
   lng: number;
@@ -42,84 +46,74 @@ export interface PesosConfig {
 const useOptimizedScheduling = () => {
   const [isLoading, setIsLoading] = useState(false);
 
-  // Configurações dos pesos (normalmente viriam do Firestore)
-  const pesos: PesosConfig = {
-    data: 10, // Peso para penalizar datas futuras
-    tempoViagem: 15, // Peso para tempo de viagem
-    distancia: 8 // Peso para distância
-  };
+  // Carrega a API do Google Maps uma vez
+  const [googleMaps, setGoogleMaps] = useState<any>(null);
+  useEffect(() => {
+    const loader = new Loader({
+      apiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
+      version: "weekly",
+      libraries: ["places", "geocoding", "routes"],
+    });
+    loader.load().then(setGoogleMaps).catch(console.error);
+  }, []);
+
 
   // Etapa 1: Geocodificar endereço do paciente
   const geocodificarEndereco = async (endereco: string): Promise<Coordinates> => {
-    // Simulação da API do Google Geocoding
-    // Em produção: usar Google Geocoding API
-    await new Promise(resolve => setTimeout(resolve, 300));
-    
-    // Coordenadas simuladas para Belo Horizonte
-    const baseCoords = { lat: -19.9245, lng: -43.9352 };
-    const randomOffset = () => (Math.random() - 0.5) * 0.1;
-    
-    return {
-      lat: baseCoords.lat + randomOffset(),
-      lng: baseCoords.lng + randomOffset()
-    };
+    if (!googleMaps) throw new Error("Google Maps API not loaded.");
+    const geocoder = new googleMaps.Geocoder();
+    return new Promise((resolve, reject) => {
+      geocoder.geocode({ address: endereco }, (results: any, status: any) => {
+        if (status === 'OK' && results) {
+          resolve(results[0].geometry.location.toJSON());
+        } else {
+          reject(new Error(`Geocoding failed for address "${endereco}" with status: ${status}`));
+        }
+      });
+    });
   };
 
-  // Etapa 1: Mapear compromissos dos colhedores
+  // Etapa 1.2: Mapear compromissos dos colhedores
   const mapearCompromissos = async (): Promise<CalendarSlot[]> => {
-    // Simulação da Google Calendar API
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
+    // Buscar coletores ativos do Firestore
+    const coletoresQuery = query(collection(db, "coletores"), where("ativo", "==", true));
+    const querySnapshot = await getDocs(coletoresQuery);
+    const coletores = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Coletor));
+
     const hoje = new Date();
-    const compromissos: CalendarSlot[] = [];
+    const timeMin = hoje.toISOString();
+    const timeMax = new Date(new Date().setDate(hoje.getDate() + 7)).toISOString(); // Buscar por 7 dias
 
-    // Simular compromissos para os próximos 7 dias
-    for (let dia = 0; dia < 7; dia++) {
-      const data = new Date(hoje);
-      data.setDate(hoje.getDate() + dia);
+    const promises = coletores.map(async (colhedor) => {
+      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(colhedor.calendarId)}/events?key=${import.meta.env.VITE_GOOGLE_MAPS_API_KEY}&timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`;
+      const response = await fetch(url);
+      const calendarData = await response.json();
       
-      // SHIRLEY - compromissos simulados
-      compromissos.push({
-        colhedor: "SHIRLEY",
-        inicio: new Date(data.getFullYear(), data.getMonth(), data.getDate(), 8, 0),
-        fim: new Date(data.getFullYear(), data.getMonth(), data.getDate(), 8, 30),
-        enderecoAntes: "Laboratório - Av. Pasteur, 106",
-        coordenadasAntes: { lat: -19.9245, lng: -43.9352 },
-        enderecoDepois: "Rua A, 100 - Centro",
-        coordenadasDepois: { lat: -19.9200, lng: -43.9300 }
-      });
-      
-      compromissos.push({
-        colhedor: "SHIRLEY", 
-        inicio: new Date(data.getFullYear(), data.getMonth(), data.getDate(), 14, 0),
-        fim: new Date(data.getFullYear(), data.getMonth(), data.getDate(), 14, 30),
-        enderecoAntes: "Rua B, 200 - Savassi",
-        coordenadasAntes: { lat: -19.9396, lng: -43.9364 },
-        enderecoDepois: "Laboratório - Av. Pasteur, 106",
-        coordenadasDepois: { lat: -19.9245, lng: -43.9352 }
-      });
+      if (calendarData.error) {
+        console.error(`Erro ao buscar agenda de ${colhedor.nome}:`, calendarData.error.message);
+        return [];
+      }
+      if (!calendarData.items) return [];
 
-      // CARLOS - compromissos simulados
-      compromissos.push({
-        colhedor: "CARLOS",
-        inicio: new Date(data.getFullYear(), data.getMonth(), data.getDate(), 9, 30),
-        fim: new Date(data.getFullYear(), data.getMonth(), data.getDate(), 10, 0),
-        enderecoAntes: "Laboratório - Av. Pasteur, 106", 
-        coordenadasAntes: { lat: -19.9245, lng: -43.9352 },
-        enderecoDepois: "Av. Brasil, 500 - Centro",
-        coordenadasDepois: { lat: -19.9180, lng: -43.9280 }
-      });
-    }
+      return calendarData.items.map((event: any) => ({
+        colhedor: colhedor.nome,
+        inicio: new Date(event.start.dateTime || event.start.date),
+        fim: new Date(event.end.dateTime || event.end.date),
+        coordenadasAntes: { lat: -19.9245, lng: -43.9352 }, // Mock
+        coordenadasDepois: { lat: -19.9245, lng: -43.9352 }, // Mock
+      }));
+    });
 
-    return compromissos;
+    const todosOsCompromissos = await Promise.all(promises);
+    return todosOsCompromissos.flat();
   };
 
   // Etapa 2: Encontrar janelas de oportunidade (slots vagos)
   const encontrarSlotsVagos = (compromissos: CalendarSlot[]): CalendarSlot[] => {
     const slotsVagos: CalendarSlot[] = [];
-    const colhedores = ["SHIRLEY", "CARLOS"];
+    const colhedoresUnicos = [...new Set(compromissos.map(c => c.colhedor))];
     
-    colhedores.forEach(colhedor => {
+    colhedoresUnicos.forEach(colhedor => {
       const compromissosColhedor = compromissos
         .filter(c => c.colhedor === colhedor)
         .sort((a, b) => a.inicio.getTime() - b.inicio.getTime());
@@ -128,162 +122,139 @@ const useOptimizedScheduling = () => {
         const atual = compromissosColhedor[i];
         const proximo = compromissosColhedor[i + 1];
         
-        // Verificar se há tempo suficiente entre compromissos (mín. 90 minutos)
-        const diferencaTempo = proximo.inicio.getTime() - atual.fim.getTime();
-        const minutosDisponiveis = diferencaTempo / (1000 * 60);
+        const diferencaTempo = (proximo.inicio.getTime() - atual.fim.getTime()) / (1000 * 60);
         
-        if (minutosDisponiveis >= 90) {
+        if (diferencaTempo >= 90) {
           slotsVagos.push({
             colhedor,
-            inicio: new Date(atual.fim.getTime() + 15 * 60 * 1000), // 15min buffer
-            fim: new Date(proximo.inicio.getTime() - 15 * 60 * 1000), // 15min buffer
-            enderecoAntes: atual.enderecoDepois,
+            inicio: new Date(atual.fim.getTime() + 15 * 60 * 1000),
+            fim: new Date(proximo.inicio.getTime() - 15 * 60 * 1000),
             coordenadasAntes: atual.coordenadasDepois,
-            enderecoDepois: proximo.enderecoAntes,
-            coordenadasDepois: proximo.coordenadasAntes
+            coordenadasDepois: proximo.coordenadasAntes,
           });
         }
       }
     });
-
     return slotsVagos;
   };
 
   // Etapa 3: Calcular tempo e distância usando Distance Matrix API
-  const calcularTempoDistancia = async (
-    origem: Coordinates,
-    destino: Coordinates
-  ): Promise<{ tempo: number; distancia: number }> => {
-    // Simulação da Google Distance Matrix API
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    // Fórmula de distância euclidiana simplificada + fatores de trânsito
-    const deltaLat = Math.abs(origem.lat - destino.lat);
-    const deltaLng = Math.abs(origem.lng - destino.lng);
-    const distanciaKm = Math.sqrt(deltaLat * deltaLat + deltaLng * deltaLng) * 111; // aprox km por grau
-    
-    // Tempo considerando trânsito (simulado)
-    const velocidadeMedia = 25; // km/h na cidade
-    const tempoMinutos = Math.round((distanciaKm / velocidadeMedia) * 60);
-    
-    return {
-      tempo: Math.max(5, tempoMinutos), // mínimo 5 minutos
-      distancia: Math.round(distanciaKm * 10) / 10 // arredondado 1 casa decimal
+  const calcularTempoDistancia = async (origem: Coordinates, destino: Coordinates): Promise<{ tempo: number; distancia: number }> => {
+    if (!googleMaps) throw new Error("Google Maps API not loaded.");
+    const service = new googleMaps.DistanceMatrixService();
+
+    const request = {
+      origins: [new googleMaps.LatLng(origem.lat, origem.lng)],
+      destinations: [new googleMaps.LatLng(destino.lat, destino.lng)],
+      travelMode: googleMaps.TravelMode.DRIVING,
     };
+
+    return new Promise((resolve, reject) => {
+      service.getDistanceMatrix(request, (response: any, status: any) => {
+        if (status === 'OK' && response) {
+          const element = response.rows[0].elements[0];
+          if (element.status === "OK") {
+            const tempo = Math.round(element.duration.value / 60);
+            const distancia = element.distance.value / 1000;
+            resolve({ tempo, distancia });
+          } else {
+            reject(new Error(`Distance Matrix element status: ${element.status}`));
+          }
+        } else {
+          reject(new Error(`Distance Matrix request failed with status: ${status}`));
+        }
+      });
+    });
   };
 
-  // Etapa 3: Teste de viabilidade de cada slot
-  const testarViabilidade = async (
-    slots: CalendarSlot[],
-    coordenadasPaciente: Coordinates
-  ): Promise<SlotViavel[]> => {
+  // Etapa 3.2: Teste de viabilidade de cada slot
+  const testarViabilidade = async (slots: CalendarSlot[], coordenadasPaciente: Coordinates): Promise<SlotViavel[]> => {
     const slotsViaveis: SlotViavel[] = [];
-    
     for (const slot of slots) {
       if (!slot.coordenadasAntes || !slot.coordenadasDepois) continue;
       
-      // Calcular tempos de viagem
-      const [viagemAntesPaciente, viagemPacienteDepois] = await Promise.all([
-        calcularTempoDistancia(slot.coordenadasAntes, coordenadasPaciente),
-        calcularTempoDistancia(coordenadasPaciente, slot.coordenadasDepois)
-      ]);
-      
-      const duracaoColeta = 30; // minutos
-      const tempoTotalNecessario = viagemAntesPaciente.tempo + duracaoColeta + viagemPacienteDepois.tempo;
-      const tempoDisponivelSlot = (slot.fim.getTime() - slot.inicio.getTime()) / (1000 * 60);
-      
-      // Verificar se é viável
-      if (tempoTotalNecessario <= tempoDisponivelSlot) {
-        // Calcular horário ideal de início
-        const inicioIdeal = new Date(slot.inicio.getTime() + viagemAntesPaciente.tempo * 60 * 1000);
+      try {
+        const [viagemAntes, viagemDepois] = await Promise.all([
+          calcularTempoDistancia(slot.coordenadasAntes, coordenadasPaciente),
+          calcularTempoDistancia(coordenadasPaciente, slot.coordenadasDepois)
+        ]);
         
-        slotsViaveis.push({
-          id: `${slot.colhedor}-${slot.inicio.getTime()}`,
-          colhedor: slot.colhedor,
-          dataHora: inicioIdeal.toLocaleString('pt-BR', {
-            day: '2-digit',
-            month: '2-digit', 
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          }),
-          inicio: inicioIdeal,
-          fim: new Date(inicioIdeal.getTime() + duracaoColeta * 60 * 1000),
-          tempoViagemTotal: viagemAntesPaciente.tempo + viagemPacienteDepois.tempo,
-          distanciaTotal: viagemAntesPaciente.distancia + viagemPacienteDepois.distancia,
-          scoreFinal: 0, // Será calculado na etapa 4
-          detalhes: {
-            tempoAntesPaciente: viagemAntesPaciente.tempo,
-            tempoPacienteDepois: viagemPacienteDepois.tempo,
-            distanciaAntesPaciente: viagemAntesPaciente.distancia,
-            distanciaPacienteDepois: viagemPacienteDepois.distancia
-          }
-        });
+        const duracaoColeta = 30;
+        const tempoTotalNecessario = viagemAntes.tempo + duracaoColeta + viagemDepois.tempo;
+        const tempoDisponivelSlot = (slot.fim.getTime() - slot.inicio.getTime()) / (1000 * 60);
+
+        if (tempoTotalNecessario <= tempoDisponivelSlot) {
+          const inicioIdeal = new Date(slot.inicio.getTime() + viagemAntes.tempo * 60 * 1000);
+          slotsViaveis.push({
+            id: `${slot.colhedor}-${slot.inicio.getTime()}`,
+            colhedor: slot.colhedor,
+            dataHora: inicioIdeal.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
+            inicio: inicioIdeal,
+            fim: new Date(inicioIdeal.getTime() + duracaoColeta * 60 * 1000),
+            tempoViagemTotal: viagemAntes.tempo + viagemDepois.tempo,
+            distanciaTotal: viagemAntes.distancia,
+            scoreFinal: 0,
+            detalhes: {
+              tempoAntesPaciente: viagemAntes.tempo,
+              tempoPacienteDepois: viagemDepois.tempo,
+              distanciaAntesPaciente: viagemAntes.distancia,
+              distanciaPacienteDepois: viagemDepois.distancia,
+            }
+          });
+        }
+      } catch (error) {
+        console.warn(`Could not test viability for a slot due to API error:`, error);
       }
     }
-    
     return slotsViaveis;
   };
 
   // Etapa 4: Calcular pontuação e classificar
-  const calcularPontuacaoFinal = (slots: SlotViavel[]): SlotViavel[] => {
+  const calcularPontuacaoFinal = (slots: SlotViavel[], pesos: PesosConfig): SlotViavel[] => {
     const hoje = new Date();
-    
     return slots.map(slot => {
-      // Peso da data - penaliza agendamentos no futuro
       const diasNoFuturo = Math.ceil((slot.inicio.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24));
       const custoDias = diasNoFuturo * pesos.data;
-      
-      // Peso do tempo de viagem
       const custoTempo = slot.tempoViagemTotal * pesos.tempoViagem;
-      
-      // Peso da distância
       const custoDistancia = slot.distanciaTotal * pesos.distancia;
-      
-      // Score final (menor é melhor)
       const scoreFinal = custoDias + custoTempo + custoDistancia;
-      
-      return {
-        ...slot,
-        scoreFinal: Math.round(scoreFinal)
-      };
+      return { ...slot, scoreFinal: Math.round(scoreFinal) };
     }).sort((a, b) => a.scoreFinal - b.scoreFinal);
   };
 
-  // Função principal que executa todas as 4 etapas
+  // Função principal que executa todas as etapas
   const buscarHorariosOtimizados = async (endereco: string): Promise<SlotViavel[]> => {
+    if (!googleMaps) {
+      throw new Error("A API do Google Maps ainda não foi carregada. Tente novamente em alguns segundos.");
+    }
     setIsLoading(true);
-    
     try {
-      // Etapa 1: Preparação do Cenário
+      const configDoc = await getDoc(doc(db, "configuracoes", "default"));
+      const pesos = configDoc.exists() ? configDoc.data().pesos as PesosConfig : { data: 10, tempoViagem: 15, distancia: 8 };
+
       const [coordenadasPaciente, compromissos] = await Promise.all([
         geocodificarEndereco(endereco),
         mapearCompromissos()
       ]);
       
-      // Etapa 2: Encontrar Janelas de Oportunidade
       const slotsVagos = encontrarSlotsVagos(compromissos);
-      
-      // Etapa 3: Teste de Viabilidade  
       const slotsViaveis = await testarViabilidade(slotsVagos, coordenadasPaciente);
+      const slotsClassificados = calcularPontuacaoFinal(slotsViaveis, pesos);
       
-      // Etapa 4: Pontuação e Classificação
-      const slotsClassificados = calcularPontuacaoFinal(slotsViaveis);
-      
-      return slotsClassificados.slice(0, 6); // Retornar top 6 opções
+      return slotsClassificados.slice(0, 6);
       
     } catch (error) {
       console.error("Erro no processo de otimização:", error);
-      return [];
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error("Ocorreu um erro desconhecido durante a otimização.");
     } finally {
       setIsLoading(false);
     }
   };
 
-  return {
-    buscarHorariosOtimizados,
-    isLoading
-  };
+  return { buscarHorariosOtimizados, isLoading };
 };
 
 export default useOptimizedScheduling;

@@ -1,0 +1,6 @@
+    "SHIRLEY": "tr9mrr9fe4bek01pr6ogsp10fg@group.calendar.google.com",
+    "ANDRÉ": "ugad563hnd51s8p80m7l80f048@group.calendar.google.com",
+    "SIDNEI": "s47p30h1mogc1mbkpitli2b3b0@group.calendar.google.com",
+    "ESTEFANIA": "erifeg5md32rm4cb733k89jv34@group.calendar.google.com",
+    "NATIELI": "21e964ef52e3fdf149e1e39d360bfb6c81f8a7cfda8a2a20e96f478040032ac5@group.calendar.google.com",
+    "MAURICIO": "cf17dbcafb753b46093bd9e2ca376c9641ef57320ec37e77af160e6e238d6e45@group.calendar.google.com"
